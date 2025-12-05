@@ -109,9 +109,6 @@ export const generateStory = async (entries: WordEntry[], targetLang: Language):
 // --- Audio (TTS) ---
 
 export const playAudio = async (text: string, lang: Language) => {
-  // Voice mapping (approximate, Gemini is multilingual but voice selection helps tone)
-  // 'Puck' and 'Kore' are good standard voices.
-  
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
@@ -129,9 +126,13 @@ export const playAudio = async (text: string, lang: Language) => {
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (!base64Audio) throw new Error("No audio data returned");
 
+    // The API returns raw PCM 16-bit data at 24kHz.
+    // AudioContext.decodeAudioData expects a file format (WAV/MP3) with headers.
+    // Since we have raw PCM, we must decode it manually.
+
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     
-    // Decode base64 to binary
+    // 1. Base64 decode to Uint8Array
     const binaryString = atob(base64Audio);
     const len = binaryString.length;
     const bytes = new Uint8Array(len);
@@ -139,10 +140,20 @@ export const playAudio = async (text: string, lang: Language) => {
       bytes[i] = binaryString.charCodeAt(i);
     }
 
-    // Decode audio data
-    const audioBuffer = await audioContext.decodeAudioData(bytes.buffer);
+    // 2. Convert to Int16Array (PCM 16-bit)
+    const pcmData = new Int16Array(bytes.buffer);
+
+    // 3. Create AudioBuffer
+    // Mono channel (1), length is number of samples, rate is 24000Hz
+    const audioBuffer = audioContext.createBuffer(1, pcmData.length, 24000);
+    const channelData = audioBuffer.getChannelData(0);
+
+    // 4. Convert Int16 to Float32 [-1.0, 1.0]
+    for (let i = 0; i < pcmData.length; i++) {
+      channelData[i] = pcmData[i] / 32768.0;
+    }
     
-    // Play
+    // 5. Play
     const source = audioContext.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(audioContext.destination);
